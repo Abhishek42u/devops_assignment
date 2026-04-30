@@ -17,13 +17,12 @@ resource "aws_launch_template" "app" {
     #!/bin/bash
     set -e
 
-    yum update -y
     yum install -y python3 python3-pip git amazon-cloudwatch-agent
 
     # -------------------------------------------------------
-    # Clone your app from GitHub (update this URL before deploy)
+    # Clone your app from GitHub
     # -------------------------------------------------------
-    git clone ${var.github_repo_url} /opt/app || true
+    git clone ${var.github_repo_url} /opt/app
     cd /opt/app
     pip3 install -r app/requirements.txt -q
 
@@ -115,7 +114,7 @@ resource "aws_autoscaling_group" "app" {
   vpc_zone_identifier       = aws_subnet.private[*].id
   target_group_arns         = [aws_lb_target_group.app.arn]
   health_check_type         = "ELB"
-  health_check_grace_period = 180
+  health_check_grace_period = 600
 
   launch_template {
     id      = aws_launch_template.app.id
