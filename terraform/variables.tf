@@ -45,7 +45,7 @@ variable "instance_type" {
 variable "ami_id" {
   description = "Amazon Linux 2 AMI ID"
   type        = string
-  default     = "ami-0c02fb55956c7d316"
+  default     = "ami-02b9a589195146a8f"
 }
 
 variable "asg_min_size" {
@@ -73,7 +73,7 @@ variable "alert_email" {
 }
 
 variable "github_repo_url" {
-  description = "HTTPS URL of your GitHub repo (e.g. https://github.com/user/repo.git)"
+  description = "HTTPS URL of your GitHub repo (e.g. https://github.com/Abhishek42u/devops_assignment.git)"
   type        = string
   default     = "https://github.com/Abhishek42u/devops_assignment.git"
 }
