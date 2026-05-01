@@ -1,6 +1,6 @@
 # AWS DevOps Assignment
 
-A production-ready web application deployed on AWS using Terraform, GitHub Actions, and CloudWatch.
+A Flask web application deployed on AWS using Terraform (IaC), GitHub Actions (CI/CD), and CloudWatch (Monitoring).
 
 ---
 
@@ -15,14 +15,13 @@ Internet
    ▼
 [Auto Scaling Group] ── private subnets (min:1, max:2, t3.micro)
    │
-   ├── EC2 (Flask app on port 5000)
-   └── EC2 (Flask app on port 5000)
+   └── EC2 instances (Flask app on port 5000)
 
-[SSM Session Manager] ── no SSH / no bastion host needed
-[CloudWatch Agent]    ── logs + memory metrics
+[SSM Session Manager] ── shell access, no SSH / no bastion host
+[CloudWatch Agent]    ── logs + memory metrics from EC2
 [SNS]                 ── email alerts on CPU/memory alarms
 
-[S3 Bucket] ◄── private, not public
+[S3 Bucket] ◄── private, accessible only via CloudFront
    │
 [CloudFront] ── serves static assets over HTTPS
 ```
@@ -34,24 +33,24 @@ Internet
 ```
 .
 ├── terraform/
-│   ├── main.tf             # Provider and Terraform version config
+│   ├── main.tf             # AWS provider + Terraform version
 │   ├── variables.tf        # All configurable inputs
-│   ├── outputs.tf          # ALB URL, CloudFront URL, S3 bucket name
-│   ├── vpc.tf              # VPC, subnets, IGW, NAT Gateway, route tables
-│   ├── security_groups.tf  # ALB SG (port 80 public) + App SG (port 5000 from ALB only)
+│   ├── outputs.tf          # ALB URL, CloudFront URL, S3 bucket name, ASG name
+│   ├── vpc.tf              # VPC, public/private subnets, IGW, NAT Gateway, route tables
+│   ├── security_groups.tf  # ALB SG (port 80) + App SG (port 5000 from ALB only)
 │   ├── iam.tf              # EC2 IAM role: SSM + CloudWatch + S3 read
-│   ├── alb.tf              # Application Load Balancer + Target Group + Listener
-│   ├── asg.tf              # Launch Template + Auto Scaling Group + scaling policies
-│   ├── cloudwatch.tf       # Log group + CPU/memory alarms + SNS alerts
-│   └── s3_cloudfront.tf    # Private S3 bucket + CloudFront distribution (OAC)
+│   ├── alb.tf              # ALB + Target Group (health check on /health) + Listener
+│   ├── asg.tf              # Launch Template (user_data bootstrap) + ASG + scaling policies
+│   ├── cloudwatch.tf       # Log group + CPU/memory alarms + SNS topic + email subscription
+│   └── s3_cloudfront.tf    # Private S3 bucket + CloudFront OAC distribution
 ├── app/
-│   ├── app.py              # Flask "Hello World" web app
-│   └── requirements.txt
+│   ├── app.py              # Flask app — serves / and /health endpoints
+│   └── requirements.txt    # flask==2.2.5 (compatible with Python 3.7 on Amazon Linux 2)
 ├── scripts/
-│   └── deploy.sh           # Script that runs on EC2 during deployment (via SSM)
+│   └── deploy.sh           # Runs on EC2 via SSM during CI/CD — git pull + restart
 └── .github/
     └── workflows/
-        └── deploy.yml      # GitHub Actions: auto-deploy on push to main
+        └── deploy.yml      # GitHub Actions: triggers on push to main
 ```
 
 ---
@@ -60,37 +59,54 @@ Internet
 
 - AWS account (free tier)
 - [Terraform](https://developer.hashicorp.com/terraform/install) >= 1.0
-- [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html) configured (`aws configure`)
+- [AWS CLI v2](https://aws.amazon.com/cli/) — run `aws configure` after install
+- [AWS SSM Session Manager Plugin](https://s3.amazonaws.com/session-manager-downloads/plugin/latest/windows/SessionManagerPluginSetup.exe) — required for `aws ssm start-session`
 - GitHub account
 
 ---
 
-## Step 1 — Create GitHub Repository
+## Deployment Steps
 
-1. Create a **public** GitHub repo (e.g. `devops-assignment`)
-2. Push all this code to the `main` branch
+### Step 1 — Configure AWS CLI
+
+```bash
+aws configure
+# Enter: Access Key ID, Secret Access Key, region (us-east-1), output (json)
+```
+
+Verify:
+```bash
+aws sts get-caller-identity
+```
+
+---
+
+### Step 2 — Push Code to GitHub
+
+Create a **public** repo on GitHub, then:
 
 ```bash
 git init
 git add .
-git commit -m "initial commit"
-git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO.git
+git commit -m "Initial commit"
+git branch -M main
+git remote add origin https://github.com/Abhishek42u/devops_assignment.git
 git push -u origin main
 ```
 
 ---
 
-## Step 2 — Update Terraform Variables
+### Step 3 — Update Variables
 
-Edit `terraform/variables.tf` and update these two values:
+Edit `terraform/variables.tf` and set:
 
-| Variable | What to change |
+| Variable | Value |
 |---|---|
 | `github_repo_url` | Your GitHub repo HTTPS URL |
-| `alert_email` | Your email address for CloudWatch alerts |
-| `ami_id` | Find latest Amazon Linux 2 AMI for your region (see below) |
+| `alert_email` | Email address to receive CloudWatch alarm notifications |
+| `ami_id` | Latest Amazon Linux 2 AMI ID for your region (see below) |
 
-**Find the latest Amazon Linux 2 AMI:**
+**Get the latest AMI ID:**
 ```bash
 aws ec2 describe-images \
   --owners amazon \
@@ -101,87 +117,74 @@ aws ec2 describe-images \
 
 ---
 
-## Step 3 — Deploy Infrastructure with Terraform
+### Step 4 — Deploy Infrastructure
 
 ```bash
 cd terraform
-
 terraform init
 terraform plan
 terraform apply
 ```
 
-After `apply` completes, copy the output values — you'll need them in the next step:
+Takes 10–15 minutes. Copy the output values when done:
 
 ```
 alb_dns_name    = "http://devops-app-alb-xxxxxxxxx.us-east-1.elb.amazonaws.com"
-s3_bucket_name  = "devops-app-static-xxxx"
-asg_name        = "devops-app-asg"
 cloudfront_url  = "https://xxxxxxxxxxxx.cloudfront.net"
+s3_bucket_name  = "devops-app-static-xxxxxxxx"
+asg_name        = "devops-app-asg"
 ```
 
-> Also check your email — **confirm the SNS subscription** to receive alarm emails.
+Check your email and **click "Confirm subscription"** in the AWS SNS email to enable alarm notifications.
 
 ---
 
-## Step 4 — Add GitHub Actions Secrets
+### Step 5 — Add GitHub Actions Secrets
 
-Go to your GitHub repo → **Settings → Secrets and variables → Actions → New repository secret**
+Go to your GitHub repo → **Settings → Secrets and variables → Actions**
 
-| Secret Name | Value |
+| Secret | Value |
 |---|---|
-| `AWS_ACCESS_KEY_ID` | Your AWS access key |
-| `AWS_SECRET_ACCESS_KEY` | Your AWS secret key |
-
-> Create a dedicated IAM user for CI/CD with these policies:
-> - `AmazonSSMFullAccess`
-> - `ElasticLoadBalancingReadOnly`
-> - `AutoScalingReadOnlyAccess`
-> - `AmazonS3FullAccess` (for static file uploads)
+| `AWS_ACCESS_KEY_ID` | Your AWS IAM access key |
+| `AWS_SECRET_ACCESS_KEY` | Your AWS IAM secret key |
 
 ---
 
-## Step 5 — Trigger a Deployment
+### Step 6 — Test the App
 
-Push any change to `main` to trigger the pipeline:
+Wait 5 minutes after `terraform apply` for EC2 to bootstrap, then open in browser:
+
+```
+http://<alb_dns_name>/health   → {"status": "ok"}
+http://<alb_dns_name>          → Hello from <hostname> page
+```
+
+---
+
+### Step 7 — Trigger CI/CD Pipeline
+
+Push any change to `main`:
 
 ```bash
-# Edit app/app.py then:
 git add app/app.py
-git commit -m "update app"
-git push
+git commit -m "Update app"
+git push origin main
 ```
 
-GitHub Actions will:
-1. Find all healthy EC2 instances in the ASG
-2. Run `git pull + pip install + systemctl restart` on each via SSM
-3. Verify the ALB health check returns HTTP 200
+Go to GitHub → **Actions** tab → watch the pipeline deploy automatically to EC2 via SSM.
 
 ---
 
-## Step 6 — Access Your App
-
-Open the `alb_dns_name` output URL in your browser. You should see:
-
-```
-Hello from ip-10-0-11-xxx!
-AWS DevOps Assignment — Flask app running on EC2 behind ALB + ASG
-```
-
----
-
-## Connecting to Instances (No SSH needed)
-
-Use SSM Session Manager instead of SSH:
+## Connecting to EC2 (No SSH)
 
 ```bash
-# List running instances
-aws ec2 describe-instances \
-  --filters "Name=tag:Name,Values=devops-app-app-server" \
-  --query "Reservations[*].Instances[*].[InstanceId,State.Name]" \
-  --output table
+# Get instance ID
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names devops-app-asg \
+  --query "AutoScalingGroups[0].Instances[*].InstanceId" \
+  --output text
 
-# Open a shell session
+# Open shell session
 aws ssm start-session --target i-xxxxxxxxxxxxxxxxx
 ```
 
@@ -189,20 +192,30 @@ aws ssm start-session --target i-xxxxxxxxxxxxxxxxx
 
 ## Monitoring
 
-| Resource | What it does |
+| Resource | Purpose |
 |---|---|
-| CloudWatch Log Group `/aws/ec2/devops-app` | Collects `/var/log/messages` from all instances |
-| Alarm `devops-app-cpu-high` | Triggers scale-up + SNS email when CPU > 70% |
-| Alarm `devops-app-cpu-low` | Triggers scale-down when CPU < 20% |
-| Alarm `devops-app-memory-high` | Sends SNS email when memory > 80% |
+| CloudWatch Log Group `/aws/ec2/devops-app` | EC2 system logs via CloudWatch Agent |
+| Alarm `devops-app-cpu-high` | CPU > 70% → scale up + email |
+| Alarm `devops-app-cpu-low` | CPU < 20% → scale down |
+| Alarm `devops-app-memory-high` | Memory > 80% → email |
 
-View logs: **AWS Console → CloudWatch → Log groups → /aws/ec2/devops-app**
+View logs: AWS Console → **CloudWatch → Log groups → /aws/ec2/devops-app**
+
+---
+
+## Static Content via CloudFront
+
+```bash
+# Upload a file to S3
+aws s3 cp index.html s3://$(terraform output -raw s3_bucket_name)/index.html
+
+# Access via CloudFront (direct S3 access is blocked)
+terraform output cloudfront_url
+```
 
 ---
 
 ## Tear Down
-
-To avoid AWS charges, destroy all resources when done:
 
 ```bash
 cd terraform
@@ -211,14 +224,13 @@ terraform destroy
 
 ---
 
-## Cost Estimate (Free Tier)
+## Cost Note (Free Tier)
 
-| Resource | Free Tier |
+| Resource | Cost |
 |---|---|
 | EC2 t3.micro | 750 hrs/month free |
-| ALB | ~$0.008/hour (not free) |
-| NAT Gateway | ~$0.045/hour (not free) |
-| S3 | 5 GB free |
-| CloudFront | 1 TB transfer free |
+| ALB | ~$0.008/hr — not free |
+| NAT Gateway | ~$0.045/hr — not free |
+| S3 + CloudFront | Mostly free under free tier |
 
-> **Tip:** NAT Gateway and ALB are the main costs. Destroy when not testing.
+Destroy resources after testing to avoid charges. ALB and NAT Gateway are the main cost drivers.
