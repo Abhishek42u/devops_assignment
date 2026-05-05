@@ -13,7 +13,7 @@ def index():
     <head><title>DevOps Assignment</title></head>
     <body style="font-family:sans-serif;max-width:600px;margin:50px auto;padding:20px">
         <h1>Hello from {hostname}!</h1>
-        <p><b>AWS DevOps Assignment v2</b> — Flask app running on EC2 behind ALB + ASG</p>
+        <p><b>AWS DevOps Assignment v2, Hello from Abhishek</b> — Flask app running on EC2 behind ALB + ASG</p>
         <hr>
         <p>Instance: <code>{hostname}</code></p>
         <p>Time: <code>{datetime.datetime.utcnow().isoformat()} UTC</code></p>
